@@ -1,11 +1,14 @@
-import glob
 import math
-import os
 import random
+from copy import deepcopy
+from os.path import basename
 
 import cv2
 import numpy
-from mmdet.datasets.pipelines.transforms import PIPELINES
+
+
+def resample():
+    return random.choice((cv2.INTER_LINEAR, cv2.INTER_CUBIC))
 
 
 def resize(image, image_size):
@@ -13,7 +16,7 @@ def resize(image, image_size):
     ratio = image_size / max(h, w)
     if ratio != 1:
         shape = (int(w * ratio), int(h * ratio))
-        image = cv2.resize(image, shape, interpolation=cv2.INTER_LINEAR)
+        image = cv2.resize(image, shape, interpolation=resample())
     return image, image.shape[:2]
 
 
@@ -118,6 +121,20 @@ def copy_paste(image, boxes, masks, p=0.):
     return image, boxes, masks
 
 
+def random_hsv(image, h=0.015, s=0.7, v=0.4):
+    # HSV color-space augmentation
+    r = numpy.random.uniform(-1, 1, 3) * [h, s, v] + 1
+    hue, sat, val = cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
+
+    x = numpy.arange(0, 256, dtype=r.dtype)
+    lut_hue = ((x * r[0]) % 180).astype('uint8')
+    lut_sat = numpy.clip(x * r[1], 0, 255).astype('uint8')
+    lut_val = numpy.clip(x * r[2], 0, 255).astype('uint8')
+
+    image_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val)))
+    cv2.cvtColor(image_hsv, cv2.COLOR_HSV2BGR, dst=image)  # no return needed
+
+
 def random_perspective(image, boxes=(), masks=(),
                        degrees=0, translate=.1, scale=.5,
                        shear=0, perspective=0., border=(0, 0)):
@@ -183,90 +200,139 @@ def random_perspective(image, boxes=(), masks=(),
     return image, boxes, masks
 
 
-@PIPELINES.register_module()
-class TSCopyPaste:
-    def __init__(self, data_dir='../Dataset/Ins2021'):
-        self.data_dir = data_dir
+def mosaic(self, index):
+    boxes4, masks4 = [], []
+    size = numpy.random.choice(self.image_sizes)
+    border = [-size // 2, -size // 2]
+    indexes4 = [index] + random.choices(range(self.num_samples), k=3)
+    yc, xc = [int(random.uniform(-x, 2 * size + x)) for x in border]
+    numpy.random.shuffle(indexes4)
+    results4 = [deepcopy(self.dataset[index]) for index in indexes4]
+    filename = results4[0]['filename']
+    shapes = [x['img_shape'][:2] for x in results4]
+    image4 = numpy.full((2 * size, 2 * size, 3), 0, numpy.uint8)
 
-        self.crop_image_dir = 'c_images'
-        self.crop_label_dir = 'c_labels'
+    for i, (results, shape) in enumerate(zip(results4, shapes)):
+        image, (h, w) = resize(results['img'], size)
 
-        self.src_names_0 = glob.glob(f'{data_dir}/{self.crop_image_dir}/0/*.png')
-        self.src_names_1 = glob.glob(f'{data_dir}/{self.crop_image_dir}/1/*.png')
+        if i == 0:  # top left
+            x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
+            x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
+        elif i == 1:  # top right
+            x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, size * 2), yc
+            x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+        elif i == 2:  # bottom left
+            x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(size * 2, yc + h)
+            x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+        elif i == 3:  # bottom right
+            x1a, y1a, x2a, y2a = xc, yc, min(xc + w, size * 2), min(size * 2, yc + h)
+            x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
-        with open(f'{data_dir}/{self.crop_label_dir}/0.txt') as f:
-            self.labels = {}
-            for line in f.readlines():
-                line = line.rstrip().split(' ')
-                self.labels[line[0]] = line[1:]
-        with open(f'{data_dir}/{self.crop_label_dir}/1.txt') as f:
-            for line in f.readlines():
-                line = line.rstrip().split(' ')
-                self.labels[line[0]] = line[1:]
+        image4[y1a:y2a, x1a:x2a] = image[y1b:y2b, x1b:x2b]
+        pad_w = x1a - x1b
+        pad_h = y1a - y1b
 
-    def paste(self, img):
-        gt_label = []
-        gt_masks = []
-        gt_boxes = []
+        masks = []
+        label = numpy.array(results['ann_info']['labels'])
+        for mask in results['ann_info']['masks']:
+            mask = [j for i in mask for j in i]
+            mask = numpy.array(mask).reshape(-1, 2)
+            masks.append(mask / numpy.array([shape[1], shape[0]]))
+        masks = [x for x in masks]
+        try:
+            boxes = (label.reshape(-1, 1), masks2boxes(masks))
+            boxes = numpy.concatenate(boxes, axis=1)
+        except IndexError:
+            return None
+        if boxes.size:
+            boxes[:, 1:] = whn2xy(boxes[:, 1:], w, h, pad_w, pad_h)
+            masks = [xyn2xy(x, w, h, pad_w, pad_h) for x in masks]
+        boxes4.append(boxes)
+        masks4.extend(masks)
+    # concatenate & clip
+    boxes4 = numpy.concatenate(boxes4, 0)
+    for i, box4 in enumerate(boxes4[:, 1:]):
+        if i % 2 == 0:
+            numpy.clip(box4, 0, 2 * size, out=box4)
+        else:
+            numpy.clip(box4, 0, 2 * size, out=box4)
+    for mask4 in masks4:
+        numpy.clip(mask4[:, 0:1], 0, 2 * size, out=mask4[:, 0:1])
+        numpy.clip(mask4[:, 1:2], 0, 2 * size, out=mask4[:, 1:2])
+    image4, boxes4, masks4 = copy_paste(image4, boxes4, masks4, p=0.0)
+    image4, boxes4, masks4 = random_perspective(image4, boxes4, masks4, border=border)
 
-        dst_h, dst_w = img.shape[:2]
-        num_0 = numpy.random.randint(5, 15)
-        num_1 = numpy.random.randint(5, 15)
-        y_c_list = numpy.random.randint(dst_h // 2 - 256, dst_h // 2 + 256, num_0 + num_1)
-        x_c_list = numpy.random.randint(256, dst_w - 256, num_0 + num_1)
-        src_names = numpy.random.choice(self.src_names_0, num_0).tolist()
-        src_names.extend(numpy.random.choice(self.src_names_1, num_1).tolist())
+    random_hsv(image4)
 
-        mask_list = []
-        poly_list = []
-        src_img_list = []
-        src_name_list = []
-        for src_name in src_names:
-            poly = []
-            label = self.labels[os.path.basename(src_name)]
-            src_img = cv2.imread(src_name)
-            for i in range(0, len(label), 2):
-                poly.append([int(label[i]), int(label[i + 1])])
-            src_mask = numpy.zeros(src_img.shape, src_img.dtype)
-            cv2.fillPoly(src_mask, [numpy.array(poly)], (255, 255, 255))
-            mask_list.append(src_mask)
-            poly_list.append(poly)
-            src_img_list.append(src_img)
-            src_name_list.append(src_name)
-        for i, (x_c, y_c) in enumerate(zip(x_c_list, y_c_list)):
-            dst_poly = []
-            for p in poly_list[i]:
-                dst_poly.append([int(p[0] + x_c), int(p[1] + y_c)])
-            dst_mask = numpy.zeros(img.shape, img.dtype)
-            cv2.fillPoly(dst_mask, [numpy.array(dst_poly, int)], (255, 255, 255))
-            x_min, y_min, w, h = cv2.boundingRect(numpy.array([dst_poly], int))
-            gt_boxes.append([x_min, y_min, x_min + w, y_min + h])
-            src = src_img_list[i].copy()
-            h, w = src.shape[:2]
-            mask = mask_list[i].copy()
-            img[dst_mask > 0] = 0
-            img[y_c:y_c + h, x_c:x_c + w] += src * (mask > 0)
-            if 'human' in os.path.basename(src_name_list[i]):
-                gt_label.append(0)
-            else:
-                gt_label.append(1)
-            dst_point = []
-            for p in dst_poly:
-                dst_point.append(p[0])
-                dst_point.append(p[1])
-            gt_masks.append([dst_point])
-        return img, gt_label, gt_boxes, gt_masks
+    label = []
+    boxes = []
+    masks = []
+    for box4, mask4 in zip(boxes4, masks4):
+        mask = []
+        for x, y in zip(mask4[0], mask4[1]):
+            mask.append(x)
+            mask.append(y)
+        masks.append([mask])
+        label.append(box4[0])
+        boxes.append(box4[1:5])
+    if len(boxes) and len(label) and len(masks):
+        label = numpy.array(label, dtype=numpy.int64)
+        boxes = numpy.array(boxes, dtype=numpy.float32)
+        return dict(filename=filename, image=image4, label=label, boxes=boxes, masks=masks)
+    else:
+        return None
 
-    def __call__(self, results):
-        img = results['img']
-        img, label, boxes, masks = self.paste(img)
 
-        masks.extend(results['ann_info']['masks'])
-        label.extend(results['ann_info']['labels'].tolist())
-        boxes.extend(results['ann_info']['bboxes'].tolist())
+def mix_up(self, index1, index2):
+    r = numpy.random.beta(32.0, 32.0)
+    data1 = mosaic(self, index1)
+    data2 = mosaic(self, index2)
+    if data1 is not None and data2 is not None:
+        image1 = data1['image']
+        label1 = data1['label']
+        boxes1 = data1['boxes']
+        masks1 = data1['masks']
 
-        results['img'] = img
-        results['ann_info']['labels'] = numpy.array(label, numpy.int64)
-        results['ann_info']['bboxes'] = numpy.array(boxes, numpy.float32)
-        results['ann_info']['masks'] = masks
-        return results
+        image2 = data2['image']
+        label2 = data2['label']
+        boxes2 = data2['boxes']
+        masks2 = data2['masks']
+        image = (image1 * r + image2 * (1 - r)).astype(numpy.uint8)
+        boxes = numpy.concatenate((boxes1, boxes2), 0)
+        label = numpy.concatenate((label1, label2), 0)
+        masks1.extend(masks2)
+        return dict(filename=data1['filename'], image=image, label=label, boxes=boxes, masks=masks1)
+    if data1 is None and data2 is not None:
+        image = data2['image']
+        label = data2['label']
+        boxes = data2['boxes']
+        masks = data2['masks']
+        return dict(filename=data2['filename'], image=image, label=label, boxes=boxes, masks=masks)
+    if data1 is not None and data2 is None:
+        image = data1['image']
+        label = data1['label']
+        boxes = data1['boxes']
+        masks = data1['masks']
+        return dict(filename=data1['filename'], image=image, label=label, boxes=boxes, masks=masks)
+    return None
+
+
+def process(self, data):
+    image = data['image']
+    label = data['label']
+    boxes = data['boxes']
+    masks = data['masks']
+
+    results = dict()
+    results['filename'] = data['filename']
+
+    results['ann_info'] = {'labels': label, 'bboxes': boxes, 'masks': masks}
+    results['img_info'] = {'height': image.shape[0], 'width': image.shape[1]}
+    results['img_fields'] = ['img']
+    results['bbox_fields'] = []
+    results['mask_fields'] = []
+    results['ori_filename'] = basename(data['filename'])
+    results['img'] = image
+    results['img_shape'] = image.shape
+    results['ori_shape'] = image.shape
+    return self.pipeline(results)
