@@ -36,7 +36,7 @@ model = dict(type='CascadeRCNN',
                                            bbox_coder=dict(type='DeltaXYWHBBoxCoder',
                                                            target_means=[0., 0., 0., 0.],
                                                            target_stds=[0.1, 0.1, 0.2, 0.2]),
-                                           loss_cls=dict(type='PolyLoss', epsilon=2.0),  # nets/nn.py
+                                           loss_cls=dict(type='PolyLoss', epsilon=-1.0),  # nets/nn.py
                                            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0)),
                                       dict(type='Shared2FCBBoxHead',
                                            num_classes=80,
@@ -44,7 +44,7 @@ model = dict(type='CascadeRCNN',
                                            bbox_coder=dict(type='DeltaXYWHBBoxCoder',
                                                            target_means=[0., 0., 0., 0.],
                                                            target_stds=[0.05, 0.05, 0.1, 0.1]),
-                                           loss_cls=dict(type='PolyLoss', epsilon=2.0),  # nets/nn.py
+                                           loss_cls=dict(type='PolyLoss', epsilon=-1.0),  # nets/nn.py
                                            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0)),
                                       dict(type='Shared2FCBBoxHead',
                                            num_classes=80,
@@ -52,7 +52,7 @@ model = dict(type='CascadeRCNN',
                                            bbox_coder=dict(type='DeltaXYWHBBoxCoder',
                                                            target_means=[0., 0., 0., 0.],
                                                            target_stds=[0.033, 0.033, 0.067, 0.067]),
-                                           loss_cls=dict(type='PolyLoss', epsilon=2.0),  # nets/nn.py
+                                           loss_cls=dict(type='PolyLoss', epsilon=-1.0),  # nets/nn.py
                                            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))],
                            mask_roi_extractor=dict(type='SingleRoIExtractor',
                                                    roi_layer=dict(type='RoIAlign',
