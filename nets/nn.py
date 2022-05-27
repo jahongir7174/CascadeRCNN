@@ -16,7 +16,7 @@ class PolyLoss(torch.nn.Module):
     <https://arxiv.org/abs/2204.12511>
     """
 
-    def __init__(self, epsilon=2.0):
+    def __init__(self, epsilon=1.0):
         super().__init__()
         self.epsilon = epsilon
 
