@@ -1,6 +1,5 @@
 import torch
 from mmdet.models.builder import MODELS
-from mmdet.models.roi_heads import StandardRoIHead
 from torch.nn.functional import cross_entropy, one_hot, softmax
 
 
