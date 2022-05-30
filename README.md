@@ -22,7 +22,7 @@
 
 ### TODO
 
-* [x] [exp01](./nets/exp01.py), default `Cascade R-CNN` detector
+* [x] [exp01](./nets/exp01.py), default [Cascade R-CNN](https://arxiv.org/abs/1906.09756) detector
 * [x] [exp02](./nets/exp02.py), added [MOSAIC](https://arxiv.org/abs/2004.10934) and [MixUp](https://arxiv.org/abs/1710.09412)
 * [x] [exp03](./nets/exp03.py), added [GN](https://arxiv.org/abs/1803.08494) and [WS](https://arxiv.org/abs/1903.10520)
 * [x] [exp04](./nets/exp04.py), added [PolyLoss](https://arxiv.org/abs/2204.12511)
